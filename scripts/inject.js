@@ -224,6 +224,29 @@ function sgRowKeeps(cwd, selection) {
   return sgSetHas(selection.members, path);
 }
 
+// 同一账号、同一目录、同一标题、同一创建时间 → 同一条会话的重复记录。
+// 会话复制/同步会在库里留下 id 不同但内容相同的行，这里只保留最近更新的那条。
+function sgDuplicateIds(meta) {
+  var buckets = Object.create(null);
+  Object.keys(meta || {}).forEach(function (id) {
+    var item = meta[id];
+    if (!item || !item.created || !item.title) return;
+    var key = [item.user, item.cwd, item.title, item.created].join('\u0001');
+    (buckets[key] || (buckets[key] = [])).push(id);
+  });
+  var hide = Object.create(null);
+  Object.keys(buckets).forEach(function (key) {
+    var ids = buckets[key];
+    if (ids.length < 2) return;
+    ids.sort(function (a, b) {
+      var diff = Number(meta[b].updated || 0) - Number(meta[a].updated || 0);
+      return diff || (a < b ? 1 : -1);
+    });
+    for (var i = 1; i < ids.length; i++) hide[ids[i]] = true;
+  });
+  return hide;
+}
+
 // 侧边栏索引分组：把工作目录当标签用，而不是当容器。
 // WorkBuddy 的会话侧栏只能按工作目录分块显示，这一层只在渲染层收窄可见行，
 // 不移动文件、不改宿主数据；分组本身只存目录路径，一个目录可以属于多个分组。
@@ -238,7 +261,7 @@ function createSidebarGroups(options) {
   var BACKUP_KEY = '{{SECRET_pgfjgqtl}}';
   var ALL = '__all__';
   var UNASSIGNED = '__unassigned__';
-  var state = { groups: [], selected: ALL, cwdById: null, spacePath: {}, workspaces: [], ready: false };
+  var state = { groups: [], selected: ALL, cwdById: null, sessionMeta: null, spacePath: {}, workspaces: [], ready: false };
   var barEl = null;
   var styleEl = null;
   var modalEl = null;
@@ -389,19 +412,21 @@ function createSidebarGroups(options) {
     var content = contentEl();
     if (!content) return;
     var selection = selectionOf();
-    if (selection.mode === 'all') { clearHidden(); return; }
+    // 重复会话在所有视图里都折掉：库里同一条对话存了两份，不该在侧栏出现两次
+    var duplicates = sgDuplicateIds(state.sessionMeta);
     // 只收窄「分组」区：「最近」是按时间排的跨目录列表，跟着分组一起清空会让人找不到刚做的任务
     var scope = content.querySelector('.conversation-section-groups') || content;
     var cards = scope.querySelectorAll('.conversation-item[data-conversation-id]');
     var headers = scope.querySelectorAll('[data-flat-row-id$="::header"]');
     var keepPrefix = Object.create(null);
     Array.prototype.forEach.call(cards, function (card) {
+      var id = card.getAttribute('data-conversation-id');
       var prefix = sgRowGroupPrefix(card.getAttribute('data-flat-row-id'));
       var spaceId = sgSpaceIdOfPrefix(prefix);
       var spacePath = (spaceId && state.spacePath[spaceId]) || '';
       var cwd = state.cwdById ? (state.cwdById[card.getAttribute('data-conversation-id')] || '') : '';
       // 卡片和所属目录用同一套判据：否则目录留下了、里面的会话却被隐藏，点开是空的
-      var keep = spacePath ? sgRowKeeps(spacePath, selection) : sgRowKeeps(cwd, selection);
+      var keep = !duplicates[id] && (spacePath ? sgRowKeeps(spacePath, selection) : sgRowKeeps(cwd, selection));
       setHidden(card, !keep);
       if (keep) {
         if (prefix) keepPrefix[prefix] = true;
@@ -421,6 +446,11 @@ function createSidebarGroups(options) {
         el.style.display = '';
         el.removeAttribute('data-wbs-sg-hidden');
       }
+    });
+    // 「最近」不参与分组筛选，但重复会话在哪儿都只该有一条
+    Array.prototype.forEach.call(content.querySelectorAll('.conversation-item[data-conversation-id]'), function (card) {
+      if (scope.contains(card)) return;
+      setHidden(card, !!duplicates[card.getAttribute('data-conversation-id')]);
     });
     revealIfHidden(selection);
     hideLeftoverMore(selection);
@@ -510,10 +540,21 @@ function createSidebarGroups(options) {
     var sessions = api('/api/sessions?uid=&range=all').then(function (data) {
       var list = (data && (data.sessions || data.list)) || [];
       var map = Object.create(null);
+      var meta = Object.create(null);
       list.forEach(function (item) {
-        if (item && item.id) map[String(item.id)] = normalize(item.cwd || '');
+        if (!item || !item.id) return;
+        var id = String(item.id);
+        map[id] = normalize(item.cwd || '');
+        meta[id] = {
+          user: String(item.user_id || ''),
+          cwd: map[id],
+          title: String(item.custom_title || item.title || '').trim(),
+          created: String(item.created_at || ''),
+          updated: String(item.updated_at || ''),
+        };
       });
       state.cwdById = map;
+      state.sessionMeta = meta;
     }).catch(function () {});
     var spaces = api('/api/spaces').then(function (data) {
       var map = Object.create(null);
@@ -614,6 +655,10 @@ function createSidebarGroups(options) {
       html += memberRow(entry, editing.members.indexOf(entry.path) >= 0);
     });
     html += '</div>';
+    var folded = Object.keys(sgDuplicateIds(state.sessionMeta)).length;
+    if (folded) {
+      html += '<div class="wbs-sg-hint">' + esc(t('已折叠重复会话')) + ' ' + folded + ' ' + esc(t('条')) + '</div>';
+    }
     body.innerHTML = html;
   }
 
@@ -2237,6 +2282,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   var WBS_ACCOUNT_NOTE_HOVER_KEY = 'workdaddy.account.noteHover.' + PROFILE_ID;
   var WBS_GROWTH_PLAN_HOVER_KEY = 'workdaddy.account.growthPlanHover.' + PROFILE_ID;
   var WBS_I18N_EN = {
+    '已折叠重复会话': 'Folded duplicate sessions',
+    '条': 'items',
     '未分组': 'Ungrouped',
     '分组': 'Group',
     '管理分组': 'Manage groups',

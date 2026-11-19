@@ -56,7 +56,7 @@ test('成员目录下的子目录会话也算这个分组', () => {
 
 test('会话卡片和所属目录用同一套判据', () => {
   const module = slice('function createSidebarGroups(', 'function createBuildLifecycle(');
-  assert.match(module, /var keep = spacePath \? sgRowKeeps\(spacePath, selection\) : sgRowKeeps\(cwd, selection\)/);
+  assert.match(module, /var keep = !duplicates\[id\] && \(spacePath \? sgRowKeeps\(spacePath, selection\) : sgRowKeeps\(cwd, selection\)\)/);
 });
 
 test('未分组视图收的正好是所有分组之外的目录', () => {
@@ -205,4 +205,22 @@ test('未渲染的成员目录会被识别出来（用于自动展开「查看�
   assert.equal(ctx.missingMember(selection, { 'D:/w/a': true, 'D:/w/b': true }), '');
   // 子目录已渲染也算该目录已渲染
   assert.equal(ctx.missingMember({ mode: 'group', members: new Set(['D:/w/a']) }, { 'D:/w/a/sub': true }), '');
+});
+
+test('同一账号同目录同标题同创建时间的会话只留最新一条', () => {
+  const source = slice('function sgDuplicateIds(', 'function createSidebarGroups(');
+  const ctx = vm.createContext({ Object, Array, String, Number });
+  vm.runInContext(source, ctx);
+  const meta = {
+    old1: { user: 'u1', cwd: 'D:/a', title: '同一个任务', created: '100', updated: '200' },
+    new1: { user: 'u1', cwd: 'D:/a', title: '同一个任务', created: '100', updated: '900' },
+    other: { user: 'u1', cwd: 'D:/a', title: '另一个任务', created: '100', updated: '300' },
+    sameTitleOtherTime: { user: 'u1', cwd: 'D:/a', title: '同一个任务', created: '500', updated: '900' },
+  };
+  const hide = ctx.sgDuplicateIds(meta);
+  assert.equal(hide.old1, true, '旧的那条应被折叠');
+  assert.equal(hide.new1, undefined, '最新的那条保留');
+  assert.equal(hide.other, undefined, '标题不同不算重复');
+  assert.equal(hide.sameTitleOtherTime, undefined, '创建时间不同不算重复');
+  assert.equal(Object.keys(ctx.sgDuplicateIds({})).length, 0);
 });
