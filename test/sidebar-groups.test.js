@@ -224,3 +224,13 @@ test('同一账号同目录同标题同创建时间的会话只留最新一条',
   assert.equal(hide.sameTitleOtherTime, undefined, '创建时间不同不算重复');
   assert.equal(Object.keys(ctx.sgDuplicateIds({})).length, 0);
 });
+
+test('侧栏被宿主重建后分组条能自愈', () => {
+  const module = slice('function createSidebarGroups(', 'function createBuildLifecycle(');
+  // 切账号时侧栏整体重建，旧观察器盯着的节点作废，条会消失且不再回来
+  assert.match(module, /function watchdog\(/);
+  assert.match(module, /if \(content !== observedTarget\) \{/);
+  assert.match(module, /if \(!barEl \|\| !barEl\.isConnected\) \{/);
+  assert.match(module, /watchTimer = setInterval\(watchdog, 1200\)/);
+  assert.match(module, /clearInterval\(watchTimer\)/);
+});

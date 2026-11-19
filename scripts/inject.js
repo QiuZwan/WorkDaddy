@@ -273,6 +273,8 @@ function createSidebarGroups(options) {
   var pendingTap = null;
   var revealTries = 0;
   var lastMapAt = 0;
+  var observedTarget = null;
+  var watchTimer = null;
   var lastPointerAt = 0;
   var editingId = null;
   var GEAR = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.6 1.9h2.8l.35 1.6 1.35.78 1.55-.55 1.4 2.42-1.2 1.1v1.56l1.2 1.1-1.4 2.42-1.55-.55-1.35.78-.35 1.6H6.6l-.35-1.6-1.35-.78-1.55.55L1.95 9.3l1.2-1.1V6.65l-1.2-1.1L3.35 3.13l1.55.55 1.35-.78z"/><circle cx="8" cy="8" r="1.9"/></svg>';
@@ -521,6 +523,7 @@ function createSidebarGroups(options) {
   function observe() {
     if (observer) observer.disconnect();
     var target = contentEl();
+    observedTarget = target;
     if (!target) return;
     observer = new MutationObserver(function (records) {
       // 自己那条 chip 的增删不算宿主变化，否则「重写 chip -> 收到通知 -> 再重写」会自激
@@ -533,6 +536,24 @@ function createSidebarGroups(options) {
     });
     // 只监听节点增删：React 重建行时重新收窄；自身只改 style 属性，不会自激
     observer.observe(target, { childList: true, subtree: true });
+  }
+
+  // 切换账号时侧栏会被整体重建，旧观察器盯着的节点已经作废，分组条也就再没人插回去。
+  // 这里低频巡检：侧栏节点换了就重新挂观察器，条没了就补上。
+  function watchdog() {
+    if (disposed) return;
+    var content = contentEl();
+    if (!content) return;
+    if (content !== observedTarget) {
+      observe();
+      ensureBar();
+      apply();
+      return;
+    }
+    if (!barEl || !barEl.isConnected) {
+      ensureBar();
+      apply();
+    }
   }
 
   function refreshMaps() {
@@ -874,6 +895,7 @@ function createSidebarGroups(options) {
     refreshTimer = setInterval(function () {
       if (doc.visibilityState === 'visible') refreshMaps();
     }, 30000);
+    watchTimer = setInterval(watchdog, 1200);
     var onVis = function () { if (doc.visibilityState === 'visible') { ensureBar(); observe(); } };
     doc.addEventListener('visibilitychange', onVis);
     return function teardownVisibility() { doc.removeEventListener('visibilitychange', onVis); };
@@ -919,6 +941,7 @@ function createSidebarGroups(options) {
     disposed = true;
     if (applyTimer) { clearTimeout(applyTimer); applyTimer = null; }
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
     if (observer) { observer.disconnect(); observer = null; }
     doc.removeEventListener('click', onDocClick, true);
     doc.removeEventListener('pointerdown', onDocPointerDown, true);
