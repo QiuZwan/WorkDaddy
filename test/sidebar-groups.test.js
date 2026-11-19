@@ -194,3 +194,15 @@ test('成员候选包含宿主空间，刚建的空项目也能进分组', () =>
   const row = module.slice(module.indexOf('function memberRow('), module.indexOf('function renderModal('));
   assert.match(row, /wbs-sg-member-name/);
 });
+
+test('未渲染的成员目录会被识别出来（用于自动展开「查看更多」）', () => {
+  const source = slice('function missingMember(', 'function revealIfHidden(');
+  const ctx = vm.createContext({ Object, Array, String });
+  vm.runInContext(source, ctx);
+  const selection = { mode: 'group', members: new Set(['D:/w/a', 'D:/w/b']) };
+  assert.equal(ctx.missingMember(selection, {}), 'D:/w/a');
+  assert.equal(ctx.missingMember(selection, { 'D:/w/a': true }), 'D:/w/b');
+  assert.equal(ctx.missingMember(selection, { 'D:/w/a': true, 'D:/w/b': true }), '');
+  // 子目录已渲染也算该目录已渲染
+  assert.equal(ctx.missingMember({ mode: 'group', members: new Set(['D:/w/a']) }, { 'D:/w/a/sub': true }), '');
+});

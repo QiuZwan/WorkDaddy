@@ -248,6 +248,8 @@ function createSidebarGroups(options) {
   var disposed = false;
   var deleteArmed = null;
   var pendingTap = null;
+  var revealTries = 0;
+  var lastMapAt = 0;
   var lastPointerAt = 0;
   var editingId = null;
   var GEAR = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.6 1.9h2.8l.35 1.6 1.35.78 1.55-.55 1.4 2.42-1.2 1.1v1.56l1.2 1.1-1.4 2.42-1.55-.55-1.35.78-.35 1.6H6.6l-.35-1.6-1.35-.78-1.55.55L1.95 9.3l1.2-1.1V6.65l-1.2-1.1L3.35 3.13l1.55.55 1.35-.78z"/><circle cx="8" cy="8" r="1.9"/></svg>';
@@ -420,6 +422,61 @@ function createSidebarGroups(options) {
         el.removeAttribute('data-wbs-sg-hidden');
       }
     });
+    revealIfHidden(selection);
+    hideLeftoverMore(selection);
+  }
+
+  // 宿主一次只渲染前几个目录，其余的藏在「查看更多」后面。成员的目录如果正好在那一批里，
+  // 选中分组后界面上就是空的 —— 这里替用户把「查看更多」点开，直到成员目录出现（有次数上限）。
+  function renderedSpacePaths() {
+    var scope = doc.querySelector('.conversation-section-groups');
+    var out = Object.create(null);
+    if (!scope) return out;
+    Array.prototype.forEach.call(scope.querySelectorAll('[data-flat-row-id$="::header"]'), function (header) {
+      var spaceId = sgSpaceIdOfPrefix(sgRowGroupPrefix(header.getAttribute('data-flat-row-id')));
+      var path = (spaceId && state.spacePath[spaceId]) || '';
+      if (path) out[path] = true;
+    });
+    return out;
+  }
+
+  function missingMember(selection, rendered) {
+    var missing = '';
+    selection.members.forEach(function (path) {
+      if (missing) return;
+      var hit = false;
+      Object.keys(rendered).forEach(function (shown) {
+        if (hit) return;
+        if (shown === path || shown.indexOf(path.charAt(path.length - 1) === '/' ? path : path + '/') === 0) hit = true;
+      });
+      if (!hit) missing = path;
+    });
+    return missing;
+  }
+
+  function revealIfHidden(selection) {
+    if (selection.mode !== 'group') return;
+    if (revealTries >= 6) return;
+    var rendered = renderedSpacePaths();
+    if (!missingMember(selection, rendered)) return;
+    var scope = doc.querySelector('.conversation-section-groups');
+    var more = scope && scope.querySelector('.conversation-show-more-row');
+    if (!more) return;
+    revealTries++;
+    try { more.click(); } catch (e) { return; }
+    // 展开后宿主会重渲染，交给观察者再收窄一次
+  }
+
+  // 成员的目录都已经渲染出来之后，「查看更多」剩下的只可能是非成员，
+  // 留着它就是一个"点了什么都不会发生"的按钮，先收起来。
+  function hideLeftoverMore(selection) {
+    if (selection.mode !== 'group') return;
+    var scope = doc.querySelector('.conversation-section-groups');
+    if (!scope) return;
+    var more = scope.querySelector('.conversation-show-more-row');
+    if (!more) return;
+    if (missingMember(selection, renderedSpacePaths())) return;
+    setHidden(more, true);
   }
 
   function schedule() {
@@ -467,6 +524,8 @@ function createSidebarGroups(options) {
     }).catch(function () {});
     return Promise.all([sessions, spaces]).then(function () {
       state.ready = true;
+      // 账号切换或新建项目后索引会变，重新给「展开成员」一次机会
+      revealTries = 0;
       renderBar();
       apply();
     });
@@ -594,6 +653,7 @@ function createSidebarGroups(options) {
 
   function selectGroup(value) {
     state.selected = String(value || ALL);
+    revealTries = 0;
     writeStore();
     renderBar();
     apply();
